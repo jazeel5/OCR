@@ -38,7 +38,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install certifi
       - name: Test updater and release configuration
-        run: node --test desktop/tests/updates.test.cjs desktop/tests/release.test.cjs
+        run: node --test desktop/tests/updates.test.cjs desktop/tests/release.test.cjs desktop/tests/settings.test.cjs
       - name: Number this release
         id: version
         run: node scripts/release-config.cjs

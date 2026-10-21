@@ -1,16 +1,18 @@
 # OCR Nexus
 
-A React interface, Express upload API, and FastAPI OCR service for extracting and reviewing text from PDFs and images. The default configuration runs locally with Tesseract. Google Cloud Vision document OCR is available through server-side configuration.
+A React interface, Express upload API, and FastAPI OCR service for extracting and reviewing text from PDFs and images. The Windows app offers Google Cloud Vision setup and a bundled offline Tesseract option. The standalone web services default to local OCR.
 
 ## Windows desktop installation
 
 Download **`OCR-Nexus-Setup-<version>-x64.exe`** from your public repository's **Releases** page for Windows 10/11 on Intel/AMD 64-bit PCs. Copy it to the PC, run the setup wizard, and open **OCR Nexus** from the desktop or Start menu. Local builds appear in `release/`. The installer includes the application, Python 3.14.9, Tesseract 5.5.3, OCR libraries, and English/Kannada language data. No separate development tools or services are needed. Local extraction works offline.
 
-Review and edit the document text and table cells, then export TXT, CSV, or JSON. The default language is English. To enable Kannada too, open **File → OCR settings folder**, set `TESSERACT_LANG=eng+kan` in `settings.env`, and restart. Google Cloud Vision remains optional: use `OCR_PROVIDER=google` and your own `GOOGLE_APPLICATION_CREDENTIALS` in that settings file. Cloud processing requires internet and a configured Google Cloud project; credentials are never included in the installer.
+Open **OCR settings** in the app header. New installations offer **Google Cloud Vision** setup; import your own service-account JSON and choose **Save and restart**. See the Google setup steps below. Google requires internet, a project with billing, and an enabled Cloud Vision API. Credentials are never included in the installer. To work without a Google account, select **Local OCR (offline)** instead. Existing installations keep their selected provider until you change it in settings.
+
+Review and edit the document text and table cells, then export TXT, CSV, or JSON. Settings offer English, Kannada, and mixed documents; Google can also detect the language automatically. Export edits before saving settings because the app restarts. An unavailable Google configuration leaves the setup screen accessible, and never silently switches to local OCR.
 
 This is an unsigned personal build, so Windows may show an unknown-publisher or SmartScreen prompt. A SHA-256 checksum and `INSTALL-WINDOWS.txt` are included beside the installer. The initial installer was built on macOS; desktop UI and OCR integration checks passed there. A real Windows installation has not yet been tested. Windows ARM and 32-bit systems are not the target of this build.
 
-The desktop app starts its own services on available loopback ports, authenticates their requests with a fresh private token, and closes OCR child processes on exit. Settings and startup diagnostics (`desktop.log`) are stored in the user data folder, normally `%APPDATA%/OCR Nexus`. Uninstall through Windows Settings → Apps. Exported documents and settings are retained.
+The desktop app starts its own services on available loopback ports, authenticates their requests with a fresh private token, and closes OCR child processes on exit. Settings and startup diagnostics (`desktop.log`) are stored in the user data folder, normally `%APPDATA%/OCR Nexus`. Use **File → Open OCR log** to open the correct diagnostic file. Uninstall through Windows Settings → Apps. Exported documents and settings are retained.
 
 ### Automatic updates from GitHub
 
@@ -23,7 +25,7 @@ The app checks five seconds after opening and every **15 minutes** while running
 
 GitHub supplies the update repository automatically at build time. The workflow uses its temporary `GITHUB_TOKEN` only in the release publishing job; no GitHub credentials are packaged in the app. A release stays in draft until all files are uploaded, so installed apps do not see incomplete releases. Failed builds do not publish updates. Feature branches are not released; rapid pushes may replace queued builds so the newest pending commit is built next. Re-running an older workflow does not replace a newer published update.
 
-The committed desktop version is a base such as `2.2.0`. CI uses the workflow run number as the patch version (`2.2.1`, `2.2.2`, …), updating the package and lock only in its checkout. Keep the base patch at zero; raise the minor or major number deliberately for a new series. Keep the same workflow and application ID to preserve version ordering and Windows installation identity. Settings in `%APPDATA%/OCR Nexus` remain outside the installation directory.
+The committed desktop version is a base such as `2.3.0`. CI uses the workflow run number as the patch version (`2.3.1`, `2.3.2`, …), updating the package and lock only in its checkout. Keep the base patch at zero; raise the minor or major number deliberately for a new series. Keep the same workflow and application ID to preserve version ordering and Windows installation identity. Settings in `%APPDATA%/OCR Nexus` remain outside the installation directory.
 
 For a local installer connected to an existing repository, set `OCR_UPDATE_REPOSITORY=YOUR-USERNAME/YOUR-REPOSITORY` before `npm run desktop:build` (PowerShell: `$env:OCR_UPDATE_REPOSITORY = 'YOUR-USERNAME/YOUR-REPOSITORY'`). A local build without this setting has automatic updates disabled. Local builds never publish; GitHub Actions handles publication. Do not commit generated installers, `node_modules`, credentials, or `latest.yml`; the provided `.gitignore` excludes build output.
 
@@ -125,6 +127,18 @@ Tests include synthetic clean and photographed letters with shadows, perspective
 
 ## Enable Google Cloud Vision
 
+For the **Windows EXE**:
+
+1. Create a project in [Google Cloud Console](https://console.cloud.google.com/), link a billing account, and enable **Cloud Vision API** in **APIs & Services → Library**. See [Google's setup guide](https://docs.cloud.google.com/vision/docs/setup).
+2. Open **IAM & Admin → Service Accounts**, create a service account in that project, and grant it **Service Usage Consumer** for the project used for billing/quota. This app sends images directly and does not require access to a Cloud Storage bucket.
+3. Open the service account's **Keys** tab, choose **Add key → Create new key → JSON**, and save the downloaded file outside this repository. If your organization blocks key creation, ask its administrator for an approved authentication method; do not bypass its policy. See [Google's key instructions](https://docs.cloud.google.com/iam/docs/keys-create-delete).
+4. In OCR Nexus, open **OCR settings**, select **Google Cloud Vision**, and choose **Select credentials JSON**. Select the file, choose the document language or automatic detection, and click **Save and restart**.
+5. Confirm that the header says **Google Cloud Vision**, then upload a small document first. Errors about access or billing mean the Google project needs attention; the app will not silently fall back to local OCR.
+
+The credentials picker validates the key locally without sending a document. A private copy stays in your Windows user data folder and survives updates; no key is exposed to the React page, GitHub workflow, or installer. The first real OCR request checks API access and may incur charges. This setup does not verify billing or quota in advance. Each person installing the app needs their own credentials; no shared Google key is distributed.
+
+For the **standalone web services**:
+
 1. Set up a Google Cloud project with billing and enable the Cloud Vision API following [Google's setup guide](https://docs.cloud.google.com/vision/docs/setup).
 2. Configure Application Default Credentials on the machine running the Python service. For local development, with the Google Cloud CLI installed:
 
@@ -145,7 +159,7 @@ Tests include synthetic clean and photographed letters with shadows, perspective
 
 In deployment, use the runtime's service identity or another supported ADC mechanism. If using a service-account JSON file, set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path in the Python environment. Keep the file outside the repository and never put credentials into a `VITE_` variable. See [Google authentication guidance](https://docs.cloud.google.com/vision/docs/authentication).
 
-Google mode uses `document_text_detection` on individual page images with the official Python SDK. It needs no Cloud Storage bucket. Pages that only need direct text extraction remain local. Scanned pages and text PDF pages rendered to inspect tables go to Google and may incur per-page charges. There is no silent provider fallback or automatic retry that might duplicate charges. Cancelling a browser request does not guarantee cancellation of a Google operation already sent. The health endpoint checks credential availability, not billing, quotas, or live permissions. Those are checked when an OCR call runs.
+Google mode uses `document_text_detection` on individual page images with the official Python SDK over HTTPS. Camera images use high-quality JPEG at their original pixel dimensions, bounded below the JSON request size limit to reduce upload time. It needs no Cloud Storage bucket. Pages that only need direct text extraction remain local. Scanned pages and text PDF pages rendered to inspect tables go to Google and may incur per-page charges. There is no silent provider fallback or automatic retry that might duplicate charges. Cancelling a browser request does not guarantee cancellation of a Google operation already sent. The health endpoint checks credential availability, not billing, quotas, or live permissions. Those are checked when an OCR call runs.
 
 The Google adapter is covered by mocked SDK success/error tests. Live Google OCR has not been verified in this workspace because project credentials were not configured as part of this task.
 
@@ -161,7 +175,7 @@ See [backend/.env.example](backend/.env.example), [ocr-service/.env.example](ocr
 - Accepted MIME types: `application/pdf`, `image/png`, `image/jpeg`, `image/webp`, `image/tiff`. The service independently decodes and checks actual content. SVG, HTML, and unsupported images are rejected.
 - TIFF preview depends on browser support; the review screen provides a link to open the original file. PDF preview uses the browser's PDF viewer.
 
-The API holds bounded uploads in memory. Python's multipart parser may temporarily spool larger uploads to disk; those handles are closed after processing or parsing failure. Results are not stored in a database. Object URLs are released when leaving the review screen. Google provider retention is governed by the configured Google service.
+The API holds bounded uploads in memory. Python's multipart parser may temporarily spool larger uploads to disk. The document worker also reads from an automatically deleted temporary file, avoiding a blocking image transfer during Windows process startup. A single deadline covers worker initialization and recognition; timeouts terminate the worker and its OCR children. Temporary files close after success or failure. Results are not stored in a database. Object URLs are released when leaving the review screen. Google provider retention is governed by the configured Google service.
 
 ## API
 

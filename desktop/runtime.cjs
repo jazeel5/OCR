@@ -1,23 +1,9 @@
 const { spawn } = require('node:child_process');
 const { randomBytes, timingSafeEqual } = require('node:crypto');
-const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 const express = require('express');
-const dotenv = require('dotenv');
-
-const SETTINGS = ['OCR_PROVIDER', 'TESSERACT_LANG', 'GOOGLE_LANGUAGE_HINTS',
-  'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_QUOTA_PROJECT'];
-
-function readSettings(userData) {
-  fs.mkdirSync(userData, { recursive: true });
-  const filename = path.join(userData, 'settings.env');
-  try {
-    fs.writeFileSync(filename, '# Restart OCR Nexus after changing settings.\nOCR_PROVIDER=tesseract\nTESSERACT_LANG=eng\n# For Kannada and English: TESSERACT_LANG=eng+kan\n# Optional Google Cloud Vision (requires your own Google project and credentials):\n# OCR_PROVIDER=google\n# GOOGLE_APPLICATION_CREDENTIALS=C:/path/to/service-account.json\n# GOOGLE_LANGUAGE_HINTS=en,kn\n', { flag: 'wx' });
-  } catch (error) { if (error.code !== 'EEXIST') throw error; }
-  const parsed = dotenv.parse(fs.readFileSync(filename));
-  return Object.fromEntries(SETTINGS.filter(key => parsed[key]).map(key => [key, parsed[key]]));
-}
+const { readSettings } = require('./settings.cjs');
 
 function allowedToken(provided, token) {
   const input = Buffer.from(provided || '');
@@ -33,11 +19,16 @@ async function startRuntime({ packaged = false, resourcesPath, userData, log = (
   const python = packaged ? path.join(resources, 'python', 'python.exe')
     : process.env.OCR_DESKTOP_PYTHON || path.join(serviceDir, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
   const settings = readSettings(userData);
-  const env = { ...process.env, ...settings, OCR_PROVIDER: settings.OCR_PROVIDER || 'tesseract',
+  const env = { ...process.env, ...settings, OCR_PROVIDER: settings.OCR_PROVIDER || 'google',
     // Documents already run in separate workers. Avoid competing OpenMP
     // threads on smaller PCs and shared Windows build runners.
     OMP_THREAD_LIMIT: process.env.OMP_THREAD_LIMIT || '1',
     OCR_DESKTOP_TOKEN: token, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1' };
+  // New installations should open the setup screen without probing external
+  // ADC locations or a cloud metadata server for missing credentials.
+  if (env.OCR_PROVIDER === 'google' && !settings.GOOGLE_APPLICATION_CREDENTIALS) {
+    env.GOOGLE_APPLICATION_CREDENTIALS = path.join(userData, 'google-credentials-not-configured.json');
+  }
   if (packaged) {
     env.TESSERACT_CMD = path.join(resources, 'tesseract', 'tesseract.exe');
     env.TESSDATA_PREFIX = path.join(resources, 'tesseract', 'tessdata');
@@ -100,8 +91,11 @@ async function startRuntime({ packaged = false, resourcesPath, userData, log = (
     for (let attempt = 0; attempt < 100 && !childEnded; attempt++) {
       try {
         const response = await privateFetch(`${ocrUrl}/health`, { signal: AbortSignal.timeout(2000) });
-        if (response.ok) { healthy = true; break; }
-        if (attempt === 0) log(`OCR health check: ${await response.text()}\n`);
+        const health = await response.json();
+        if (response.ok || (response.status === 503 && health.status === 'unavailable')) {
+          healthy = true; break; // Keep settings accessible when the provider needs setup.
+        }
+        if (attempt === 0) log(`OCR health check: ${JSON.stringify(health)}\n`);
       } catch { /* Wait for uvicorn startup. */ }
       await new Promise(resolve => setTimeout(resolve, 200));
     }

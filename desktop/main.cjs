@@ -1,10 +1,14 @@
-const { app, BrowserWindow, Menu, dialog, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, session, shell, ipcMain } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { startRuntime } = require('./runtime.cjs');
 const { createUpdateController } = require('./updates.cjs');
+const { publicSettings, readCredential, saveSettings } = require('./settings.cjs');
 
-if (process.env.OCR_DESKTOP_TEST_DATA && !app.isPackaged) app.setPath('userData', process.env.OCR_DESKTOP_TEST_DATA);
+// Isolate smoke tests for packaged builds as well as development builds.
+if (process.env.OCR_DESKTOP_TEST_DATA && path.isAbsolute(process.env.OCR_DESKTOP_TEST_DATA)) {
+  app.setPath('userData', process.env.OCR_DESKTOP_TEST_DATA);
+}
 app.setName('OCR Nexus');
 app.setAppUserModelId('com.ocrnexus.desktop');
 let window;
@@ -31,7 +35,42 @@ else {
     });
     window = new BrowserWindow({ width: 1280, height: 900, minWidth: 800, minHeight: 600,
       title: 'OCR Nexus', backgroundColor: '#f8fafc',
-      webPreferences: { session: privateSession, nodeIntegration: false, contextIsolation: true, sandbox: true },
+      webPreferences: { session: privateSession, preload: path.join(__dirname, 'preload.cjs'),
+        nodeIntegration: false, contextIsolation: true, sandbox: true },
+    });
+    let pendingCredential;
+    let settingsSaved = false;
+    function settingsHandler(channel, handler) {
+      ipcMain.handle(channel, async (event, input) => {
+        if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame
+          || !runtime || new URL(event.senderFrame.url).origin !== runtime.url) throw new Error('Unauthorized settings request.');
+        try { return await handler(input); }
+        catch (error) { return { error: error.message }; }
+      });
+    }
+    settingsHandler('ocr:settings', () => { pendingCredential = undefined; return publicSettings(userData); });
+    settingsHandler('ocr:choose-credentials', async () => {
+      const selection = await dialog.showOpenDialog(window, { title: 'Select Google service-account JSON',
+        properties: ['openFile'], filters: [{ name: 'Google credentials', extensions: ['json'] }] });
+      if (selection.canceled || !selection.filePaths[0]) return { cancelled: true };
+      pendingCredential = readCredential(selection.filePaths[0]);
+      return { projectId: pendingCredential.project_id, filename: path.basename(selection.filePaths[0]) };
+    });
+    settingsHandler('ocr:save-settings', input => {
+      const saved = saveSettings(userData, input, pendingCredential);
+      pendingCredential = undefined;
+      settingsSaved = true;
+      return saved;
+    });
+    settingsHandler('ocr:restart', () => {
+      if (!settingsSaved) throw new Error('Save OCR settings before restarting.');
+      app.relaunch();
+      setImmediate(() => app.quit());
+      return { restarting: true };
+    });
+    settingsHandler('ocr:setup-guide', async () => {
+      await shell.openExternal('https://docs.cloud.google.com/vision/docs/setup');
+      return { opened: true };
     });
     window.webContents.on('will-navigate', (event, url) => {
       if (!runtime || new URL(url).origin !== runtime.url) event.preventDefault();
@@ -63,6 +102,7 @@ else {
     });
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: 'File', submenu: [{ label: 'OCR settings folder', click: () => shell.openPath(userData) },
+        { label: 'Open OCR log', click: () => shell.openPath(logPath) },
         { type: 'separator' }, { role: 'quit' }] },
       { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' },
         { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },

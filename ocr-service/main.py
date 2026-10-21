@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import math
-import multiprocessing
 import os
 import signal
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 import threading
 import time
@@ -153,7 +155,9 @@ def tesseract_languages():
 @lru_cache(maxsize=1)
 def google_client():
     from google.cloud import vision
-    return vision.ImageAnnotatorClient()
+    # HTTPS works through ordinary desktop networks without an HTTP/2 gRPC
+    # channel. The official client still handles authentication and OCR.
+    return vision.ImageAnnotatorClient(transport='rest')
 
 
 def check_provider():
@@ -167,7 +171,7 @@ def check_provider():
     except DocumentError:
         raise
     except Exception as exc:
-        message = ('Google OCR is not configured. Set up Application Default Credentials.'
+        message = ('Google OCR is not configured. Select your Google credentials in OCR settings, or configure Application Default Credentials for the web service.'
                    if PROVIDER == 'google' else 'Tesseract is unavailable. Install the Tesseract executable and language data.')
         raise DocumentError(503, message) from exc
 
@@ -300,13 +304,16 @@ def tesseract_words(data, offset_x=0, offset_y=0):
 def google_ocr(image, deadline):
     from google.cloud import vision
     from google.api_core import exceptions as google_errors
+    from google.auth import exceptions as auth_errors
     check_provider()
     output = io.BytesIO()
-    image.save(output, format='PNG')
-    if output.tell() > 18 * 1024 * 1024:
+    # Bound base64 data below Vision's 10 MB JSON limit and avoid large PNG
+    # uploads from camera photos. Keep the original pixel dimensions.
+    image.convert('RGB').save(output, format='JPEG', quality=95, subsampling=0)
+    if output.tell() > 7 * 1024 * 1024:
         output = io.BytesIO()
-        image.save(output, format='JPEG', quality=95)
-    if output.tell() > 18 * 1024 * 1024:
+        image.convert('RGB').save(output, format='JPEG', quality=85, subsampling=0)
+    if output.tell() > 7 * 1024 * 1024:
         raise DocumentError(413, 'The image is too large for Google OCR. Reduce its dimensions.')
     try:
         response = google_client().document_text_detection(
@@ -322,6 +329,10 @@ def google_ocr(image, deadline):
         raise DocumentError(429, 'Google OCR quota is exhausted. Please try again later.') from exc
     except google_errors.GoogleAPICallError as exc:
         raise DocumentError(502, 'Google OCR is temporarily unavailable.') from exc
+    except auth_errors.RefreshError as exc:
+        raise DocumentError(503, 'Google credentials could not be verified. Select a valid credentials file in OCR settings.') from exc
+    except auth_errors.TransportError as exc:
+        raise DocumentError(503, 'Cannot reach Google authentication. Check your internet connection.') from exc
     if response.error.message:
         raise DocumentError(502, 'Google OCR could not process this page.')
     annotation = response.full_text_annotation
@@ -447,67 +458,64 @@ def process_bytes(contents, content_type, deadline):
                        pages=len(results), provider=PROVIDER, page_results=results, warnings=notices).model_dump()
 
 
-def worker(connection, contents, content_type):
-    if hasattr(os, 'setsid'):
-        os.setsid()  # Include any Tesseract subprocess in timeout cleanup.
-    try:
-        result = process_bytes(contents, content_type, time.monotonic() + DOCUMENT_TIMEOUT)
-        connection.send((200, result))
-    except DocumentError as exc:
-        connection.send((exc.status, str(exc)))
-    except Exception:
-        logger.exception('Document processing failed')
-        connection.send((500, 'Unable to process this document.'))
-    finally:
-        connection.close()
-
-
 def run_isolated(contents, content_type):
-    context = multiprocessing.get_context('spawn')
-    receive, send = context.Pipe(duplex=False)
-    process = context.Process(target=worker, args=(send, contents, content_type), daemon=True)
+    # multiprocessing.start() serializes the image before its poll timeout
+    # starts. A separate script avoids that unbounded Windows spawn handshake.
+    # A temporary input handle also avoids synchronous pipe writes on Windows.
+    # communicate() can then bound startup and recognition, even if imports hang.
+    with tempfile.TemporaryFile() as source:
+        source.write(contents)
+        source.seek(0)
+        return run_worker(source, content_type, len(contents))
+
+
+def run_worker(source, content_type, size):
     started = time.monotonic()
+    logger.info('Starting document worker (%s, %d bytes)', content_type, size)
+    process = subprocess.Popen(
+        [sys.executable, '-X', 'utf8', '-B', str(Path(__file__).with_name('document_worker.py')), content_type],
+        stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=os.name != 'nt',
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+    )
     try:
-        logger.info('Starting document worker (%s, %d bytes)', content_type, len(contents))
-        process.start()
         logger.info('Document worker started (pid=%d)', process.pid)
-        send.close()
-        if not receive.poll(DOCUMENT_TIMEOUT):
-            logger.warning('Document worker exceeded %ss (pid=%d)', DOCUMENT_TIMEOUT, process.pid)
-            raise DocumentError(504, 'Processing took too long. Try fewer pages or a smaller image.')
         try:
-            status, result = receive.recv()
-        except EOFError as exc:
-            raise DocumentError(422, 'The document could not be decoded.') from exc
+            output, errors = process.communicate(timeout=max(0.001, DOCUMENT_TIMEOUT - (time.monotonic() - started)))
+        except subprocess.TimeoutExpired as exc:
+            logger.warning('Document worker exceeded %ss (pid=%d)', DOCUMENT_TIMEOUT, process.pid)
+            raise DocumentError(504, 'Processing took too long. Try fewer pages or a smaller image.') from exc
+        if errors:
+            logger.warning('Document worker diagnostics: %s', errors[-8000:].decode('utf-8', errors='replace'))
+        if process.returncode:
+            raise DocumentError(502, 'The OCR worker stopped unexpectedly. Check the desktop log and reopen the app.')
+        try:
+            status, result = json.loads(output)
+        except (ValueError, TypeError) as exc:
+            raise DocumentError(502, 'The OCR worker returned an invalid response.') from exc
         logger.info('Document worker returned HTTP %d after %.1fs', status, time.monotonic() - started)
         if status != 200:
             raise DocumentError(status, result)
         return result
     finally:
-        receive.close()
-        send.close()
-        if process.pid is not None:
-            process.join(timeout=0.2)
-            if process.is_alive():
-                if os.name == 'nt':
-                    # Terminating only the worker would leave its OCR subprocess behind.
-                    try:
-                        subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                       timeout=5, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
-                    except (OSError, subprocess.TimeoutExpired):
-                        logger.warning('Process-tree cleanup failed; terminating the worker directly.')
-                if hasattr(os, 'killpg'):
-                    try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass  # Worker may not have created its process group yet.
-                process.terminate()
-                process.join(timeout=1)
-            if process.is_alive():
+        if process.poll() is None:
+            if os.name == 'nt':
+                try:
+                    subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=5, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
+                except (OSError, subprocess.TimeoutExpired):
+                    logger.warning('Process-tree cleanup failed; terminating the worker directly.')
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
                 process.kill()
-                process.join()
-            process.close()
+            process.wait(timeout=5)
+        for stream in (process.stdout, process.stderr):
+            stream.close()
 
 
 @app.post('/process', response_model=OCRResponse)

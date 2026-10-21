@@ -2,6 +2,7 @@ const { _electron: electron, expect } = require('../frontend/node_modules/@playw
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { generateKeyPairSync } = require('node:crypto');
 
 // OCR has a 150s document deadline, the API allows 180s, and the UI allows
 // 190s. Observe the response before checking the editor so a slow Windows
@@ -25,6 +26,8 @@ async function uploadDocument(page, filename) {
 
 (async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'ocr-electron-'));
+  // CI exercises the offline path without Google credentials or billable calls.
+  await fs.writeFile(path.join(temp, 'settings.env'), 'OCR_PROVIDER=tesseract\nTESSERACT_LANG=eng\n');
   let application;
   let page;
   let userData = temp;
@@ -36,7 +39,7 @@ async function uploadDocument(page, filename) {
     const env = { ...process.env, OCR_DESKTOP_TEST_DATA: temp };
     delete env.ELECTRON_RUN_AS_NODE;
     application = await electron.launch({ executablePath: process.env.OCR_DESKTOP_EXECUTABLE || require('electron'),
-      args: process.env.OCR_DESKTOP_EXECUTABLE ? [] : [__dirname],
+      args: [...(process.env.OCR_DESKTOP_EXECUTABLE ? [] : [__dirname]), `--user-data-dir=${temp}`],
       env, timeout: 60000 });
     // Release tests must not contact GitHub before this build is published.
     userData = await application.evaluate(({ app }) => {
@@ -45,6 +48,7 @@ async function uploadDocument(page, filename) {
       req('electron-updater').autoUpdater.checkForUpdates = async () => null;
       return app.getPath('userData');
     });
+    expect(userData).toBe(temp);
     page = await application.firstWindow();
     page.on('pageerror', error => errors.push(error.message));
     page.on('requestfailed', request => networkErrors.push(`${request.method()} ${new URL(request.url()).pathname}: ${request.failure()?.errorText}`));
@@ -52,6 +56,34 @@ async function uploadDocument(page, filename) {
     await expect(page.evaluate(() => typeof window.require)).resolves.toBe('undefined');
     const unauthorized = await fetch(`${new URL(page.url()).origin}/api/health`);
     expect(unauthorized.status).toBe(401);
+    await page.getByRole('button', { name: 'OCR settings', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'OCR settings' })).toBeVisible();
+    await page.getByLabel('Recognition service').selectOption('google');
+    await expect(page.getByRole('button', { name: 'Save and restart' })).toBeDisabled();
+    const publicSettings = await page.evaluate(() => window.ocrDesktop.getSettings());
+    expect(publicSettings.provider).toBe('tesseract');
+    expect(publicSettings).not.toHaveProperty('GOOGLE_APPLICATION_CREDENTIALS');
+    // Test the native picker and private storage with a generated test key.
+    // No Google request is made and the service keeps its offline configuration.
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048,
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+    const keyFile = path.join(temp, 'test-key.json');
+    await fs.writeFile(keyFile, JSON.stringify({ type: 'service_account', project_id: 'ocr-test-project',
+      private_key: privateKey, client_email: 'ocr@ocr-test-project.iam.gserviceaccount.com', token_uri: 'https://oauth2.googleapis.com/token' }));
+    await application.evaluate(({ dialog }, filename) => {
+      const original = dialog.showOpenDialog;
+      dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [filename] }; };
+    }, keyFile);
+    await page.getByRole('button', { name: 'Select credentials JSON' }).click();
+    await expect(page.getByText('Project: ocr-test-project', { exact: true })).toBeVisible();
+    await page.screenshot({ path: path.join(diagnostics, 'google-settings.png') });
+    const saved = await page.evaluate(() => window.ocrDesktop.saveSettings({ provider: 'google', localLanguage: 'eng', cloudLanguage: 'en,kn' }));
+    expect(saved.credentialConfigured).toBe(true);
+    expect(saved.projectId).toBe('ocr-test-project');
+    expect(JSON.stringify(saved)).not.toContain('PRIVATE KEY');
+    const offline = await page.evaluate(() => window.ocrDesktop.saveSettings({ provider: 'tesseract', localLanguage: 'eng', cloudLanguage: '' }));
+    expect(offline.provider).toBe('tesseract');
+    await page.getByRole('button', { name: 'Close settings' }).click();
     await uploadDocument(page, 'letter-photo.png');
     const editor = page.locator('#page-1');
     await expect(editor).toContainText('POWER TRANSMISSION');
@@ -79,7 +111,7 @@ async function uploadDocument(page, filename) {
     await expect(page.locator('iframe')).toBeVisible();
     expect(errors).toEqual([]);
     await require('./test-update-download.cjs')(application, temp);
-    console.log('Desktop passed: startup, private API, sandbox, photo OCR, editable tables, CSV export, text editing, clipboard, text export, native PDF.');
+    console.log('Desktop passed: startup, private API, sandbox, Google settings and native credential picker, photo OCR, editable tables, CSV export, text editing, clipboard, text export, native PDF.');
     await page.screenshot({ path: path.join(diagnostics, 'success.png') });
   } catch (error) {
     await fs.writeFile(path.join(diagnostics, 'failure.txt'), `${error.stack}\n${[...errors, ...networkErrors].join('\n')}\n`);

@@ -9,6 +9,7 @@ test('desktop starts private services, extracts a photo and stops Python', { tim
   const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'ocr-desktop-'));
   let runtime;
   try {
+    await fs.writeFile(path.join(userData, 'settings.env'), 'OCR_PROVIDER=tesseract\nTESSERACT_LANG=eng\n');
     runtime = await startRuntime({ userData, log: message => process.stderr.write(message) });
     assert.equal((await fetch(`${runtime.url}/api/health`)).status, 401);
     const headers = { 'X-OCR-Token': runtime.token };
@@ -35,6 +36,19 @@ test('desktop rejects an invalid token without comparison errors', () => {
   assert.equal(allowedToken(undefined, 'secret'), false);
   assert.equal(allowedToken('secrex', 'secret'), false);
   assert.equal(allowedToken('secret', 'secret'), true);
+});
+
+test('desktop opens the setup UI when Google credentials are missing', { timeout: 15000 }, async () => {
+  const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'ocr-desktop-setup-'));
+  let runtime;
+  try {
+    runtime = await startRuntime({ userData });
+    const headers = { 'X-OCR-Token': runtime.token };
+    const health = await fetch(`${runtime.url}/api/health`, { headers });
+    assert.equal(health.status, 503);
+    assert.equal((await health.json()).provider, 'google');
+    assert.equal((await fetch(runtime.url, { headers })).status, 200);
+  } finally { await runtime?.stop(); await fs.rm(userData, { recursive: true, force: true }); }
 });
 
 test('desktop reports missing Python and cleans up startup', { timeout: 10000 }, async () => {

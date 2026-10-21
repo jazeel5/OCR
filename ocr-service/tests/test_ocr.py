@@ -1,5 +1,5 @@
 import io
-import multiprocessing
+import subprocess
 import time
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -154,7 +154,10 @@ def test_google_document_detection(monkeypatch):
     assert result['page_results'][0]['engine'] == 'google'
     assert result['confidence'] == 90
     request = client.document_text_detection.call_args.kwargs
-    assert request['image'].content.startswith(b'\x89PNG')
+    with Image.open(io.BytesIO(request['image'].content)) as sent:
+        assert sent.format == 'JPEG'
+        assert sent.size == scan_image().size
+    assert len(request['image'].content) < 7 * 1024 * 1024
     assert request['retry'] is None
     assert request['timeout'] <= main.PAGE_TIMEOUT
 
@@ -214,8 +217,58 @@ def test_chunked_upload_limit(monkeypatch):
 
 def test_hard_timeout_cleans_up_process(monkeypatch):
     monkeypatch.setattr(main, 'DOCUMENT_TIMEOUT', 0.001)
-    before = {p.pid for p in multiprocessing.active_children()}
+    processes = []
+    popen = subprocess.Popen
+    def track(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        if args[0][0] == main.sys.executable:
+            processes.append(child)
+        return child
+    monkeypatch.setattr(main.subprocess, 'Popen', track)
     with pytest.raises(main.DocumentError) as error:
         main.run_isolated(text_pdf(), 'application/pdf')
     assert error.value.status == 504
-    assert {p.pid for p in multiprocessing.active_children()} == before
+    assert processes and all(child.poll() is not None for child in processes)
+    assert all(child.stdout.closed and child.stderr.closed for child in processes)
+
+
+def test_hung_worker_startup_is_bounded_for_large_input(monkeypatch):
+    monkeypatch.setattr(main, 'DOCUMENT_TIMEOUT', 0.2)
+    popen = subprocess.Popen
+    processes = []
+    def stalled(_command, **kwargs):
+        # Simulate a Windows worker stuck before it can consume the image.
+        # Input larger than a pipe buffer must not block the parent timeout.
+        if _command[0] != main.sys.executable:
+            return popen(_command, **kwargs)
+        child = popen([main.sys.executable, '-c', 'import time; time.sleep(60)'], **kwargs)
+        processes.append(child)
+        return child
+    monkeypatch.setattr(main.subprocess, 'Popen', stalled)
+    started = time.monotonic()
+    with pytest.raises(main.DocumentError) as error:
+        main.run_isolated(b'x' * 2_000_000, 'image/png')
+    assert error.value.status == 504
+    assert time.monotonic() - started < 5
+    assert processes[0].poll() is not None
+
+
+def test_isolated_real_photo_and_worker_error():
+    result = main.run_isolated(image_bytes(), 'image/png')
+    assert '12345' in result['text']
+    with pytest.raises(main.DocumentError) as error:
+        main.run_isolated(b'not a PDF', 'application/pdf')
+    assert error.value.status == 415
+
+
+@pytest.mark.parametrize('exception', ['RefreshError', 'TransportError'])
+def test_google_authentication_errors_are_actionable(monkeypatch, exception):
+    from google.auth import exceptions
+    monkeypatch.setattr(main, 'PROVIDER', 'google')
+    client = Mock()
+    client.document_text_detection.side_effect = getattr(exceptions, exception)('private details')
+    monkeypatch.setattr(main, 'google_client', lambda: client)
+    with pytest.raises(main.DocumentError) as error:
+        process(image_bytes(), 'image/png')
+    assert error.value.status == 503
+    assert 'private details' not in str(error.value)

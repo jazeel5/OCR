@@ -5,6 +5,52 @@ import { readFile } from 'node:fs/promises';
 const ready = { status: 'ready', provider: 'tesseract', processing_location: 'local', max_upload_bytes: 10485760, max_pages: 20 };
 const mockResult = { success: true, filename: 'invoice.png', data: { text: 'Invoice 123', confidence: 94, pages: 1, provider: 'tesseract', warnings: [], page_results: [{ page: 1, text: 'Invoice 123', confidence: 94, engine: 'tesseract', word_count: 2 }] } };
 
+test('desktop Google setup is accessible without credentials and saves only choices', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.ocrDesktop = {
+      getSettings: async () => ({ provider: 'google', localLanguage: 'eng', cloudLanguage: '', credentialConfigured: false, projectId: '' }),
+      chooseGoogleCredentials: async () => ({ filename: 'test-key.json', projectId: 'ocr-test-project' }),
+      saveSettings: async value => { window.savedSettings = value; return value; },
+      restart: async () => { window.restartRequested = true; return { restarting: true }; },
+      openSetupGuide: async () => ({ opened: true }),
+    };
+  });
+  await page.route('**/api/health', route => route.fulfill({ status: 503, json: {
+    ...ready, status: 'unavailable', provider: 'google', processing_location: 'google-cloud', error: 'Google OCR is not configured.' } }));
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Choose a document' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Set up Google OCR' }).click();
+  const dialog = page.getByRole('dialog', { name: 'OCR settings' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/usage may incur charges/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Save and restart' })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Select credentials JSON' }).click();
+  await expect(dialog.getByText('Project: ocr-test-project')).toBeVisible();
+  await dialog.getByLabel('Document language').selectOption('en,kn');
+  await dialog.getByRole('button', { name: 'Save and restart' }).click();
+  await expect.poll(() => page.evaluate(() => window.restartRequested)).toBe(true);
+  expect(await page.evaluate(() => window.savedSettings)).toEqual({ provider: 'google', localLanguage: 'eng', cloudLanguage: 'en,kn' });
+});
+
+test('desktop can choose offline OCR without a Google key and recover from a failed save', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.ocrDesktop = {
+      getSettings: async () => ({ provider: 'google', localLanguage: 'eng', cloudLanguage: '', credentialConfigured: false }),
+      saveSettings: async () => ({ error: 'Settings could not be saved. Try again.' }),
+      restart: async () => { throw new Error('Must not restart after a failed save'); },
+    };
+  });
+  await mockHealth(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'OCR settings', exact: true }).click();
+  await page.getByLabel('Recognition service').selectOption('tesseract');
+  await expect(page.getByRole('button', { name: 'Save and restart' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Save and restart' }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Settings could not be saved');
+  await page.getByRole('button', { name: 'Close settings' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
 async function mockHealth(page, data = ready) {
   await page.route('**/api/health', route => route.fulfill({ json: data }));
 }
