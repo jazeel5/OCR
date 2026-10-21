@@ -1,6 +1,7 @@
 """Desktop-only service entry: private port, request token, and parent lifecycle."""
 import hmac
 import json
+import logging
 import multiprocessing
 import os
 import socket
@@ -64,6 +65,7 @@ class PrivateService:
 
 
 def run():
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s %(name)s: %(message)s')
     import uvicorn
     from main import app
 

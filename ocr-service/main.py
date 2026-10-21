@@ -466,15 +466,20 @@ def run_isolated(contents, content_type):
     context = multiprocessing.get_context('spawn')
     receive, send = context.Pipe(duplex=False)
     process = context.Process(target=worker, args=(send, contents, content_type), daemon=True)
+    started = time.monotonic()
     try:
+        logger.info('Starting document worker (%s, %d bytes)', content_type, len(contents))
         process.start()
+        logger.info('Document worker started (pid=%d)', process.pid)
         send.close()
         if not receive.poll(DOCUMENT_TIMEOUT):
+            logger.warning('Document worker exceeded %ss (pid=%d)', DOCUMENT_TIMEOUT, process.pid)
             raise DocumentError(504, 'Processing took too long. Try fewer pages or a smaller image.')
         try:
             status, result = receive.recv()
         except EOFError as exc:
             raise DocumentError(422, 'The document could not be decoded.') from exc
+        logger.info('Document worker returned HTTP %d after %.1fs', status, time.monotonic() - started)
         if status != 200:
             raise DocumentError(status, result)
         return result

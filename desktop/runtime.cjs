@@ -34,6 +34,9 @@ async function startRuntime({ packaged = false, resourcesPath, userData, log = (
     : process.env.OCR_DESKTOP_PYTHON || path.join(serviceDir, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
   const settings = readSettings(userData);
   const env = { ...process.env, ...settings, OCR_PROVIDER: settings.OCR_PROVIDER || 'tesseract',
+    // Documents already run in separate workers. Avoid competing OpenMP
+    // threads on smaller PCs and shared Windows build runners.
+    OMP_THREAD_LIMIT: process.env.OMP_THREAD_LIMIT || '1',
     OCR_DESKTOP_TOKEN: token, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1' };
   if (packaged) {
     env.TESSERACT_CMD = path.join(resources, 'tesseract', 'tesseract.exe');

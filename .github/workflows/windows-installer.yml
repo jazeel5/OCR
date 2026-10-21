@@ -20,13 +20,14 @@ jobs:
       - name: Require a public update repository
         if: github.event.repository.private
         run: throw 'This update workflow requires a public GitHub repository.'
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - uses: actions/setup-python@v5
+          package-manager-cache: false
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
       - name: Install build dependencies
@@ -48,11 +49,20 @@ jobs:
       - name: Verify release files
         run: node scripts/verify-release.cjs
       - name: Test the packaged Windows application
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $env:OCR_DESKTOP_EXECUTABLE = Join-Path $pwd 'release/win-unpacked/OCR Nexus.exe'
           npm --prefix desktop run test:electron
-      - uses: actions/upload-artifact@v4
+      - name: Save desktop test diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-test-diagnostics
+          path: desktop/test-results/desktop-smoke/
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v6
         with:
           name: windows-release
           path: |
@@ -70,7 +80,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: windows-release
           path: release
