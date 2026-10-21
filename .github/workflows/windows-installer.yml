@@ -1,0 +1,101 @@
+name: Windows updates
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    # Feature branches never become updates for installed applications.
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Require a public update repository
+        if: github.event.repository.private
+        run: throw 'This update workflow requires a public GitHub repository.'
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install build dependencies
+        run: |
+          npm ci --prefix frontend
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --prefix desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install certifi
+      - name: Test updater and release configuration
+        run: node --test desktop/tests/updates.test.cjs desktop/tests/release.test.cjs
+      - name: Number this release
+        id: version
+        run: node scripts/release-config.cjs
+      - name: Lint frontend
+        run: npm run lint
+      - name: Build offline installer and update manifest
+        run: npm run desktop:build
+      - name: Verify release files
+        run: node scripts/verify-release.cjs
+      - name: Test the packaged Windows application
+        shell: pwsh
+        run: |
+          $env:OCR_DESKTOP_EXECUTABLE = Join-Path $pwd 'release/win-unpacked/OCR Nexus.exe'
+          npm --prefix desktop run test:electron
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            release/OCR-Nexus-Setup-*.exe
+            release/OCR-Nexus-Setup-*.exe.sha256
+            release/OCR-Nexus-Setup-*.exe.blockmap
+            release/latest.yml
+            release/INSTALL-WINDOWS.txt
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: release
+      - name: Publish a complete GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${RELEASE_VERSION}"
+          latest_tag="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
+          if [[ "$latest_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$(printf '%s\n%s\n' "$tag" "$latest_tag" | sort -V | tail -n 1)" != "$tag" ]; then
+            echo "A newer release ($latest_tag) already exists; skipping this older run."
+            exit 0
+          fi
+          if gh release view "$tag" --json isDraft > existing-release.json 2>/dev/null; then
+            if [ "$(jq -r '.isDraft' existing-release.json)" != "true" ]; then
+              echo "Release $tag is already published; keeping its original files."
+              exit 0
+            fi
+          else
+            gh release create "$tag" --target "$RELEASE_COMMIT" --draft --title "OCR Nexus $RELEASE_VERSION" --generate-notes
+          fi
+          gh release upload "$tag" release/OCR-Nexus-Setup-*.exe release/OCR-Nexus-Setup-*.exe.sha256 release/OCR-Nexus-Setup-*.exe.blockmap release/latest.yml release/INSTALL-WINDOWS.txt --clobber
+          gh release edit "$tag" --draft=false --latest

@@ -1,0 +1,110 @@
+{
+  "name": "ocr-nexus-desktop",
+  "version": "2.2.0",
+  "private": true,
+  "description": "Offline PDF and photo OCR with editable text and tables",
+  "author": "OCR Nexus",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "node run.cjs",
+    "dist:win": "electron-builder --config electron-builder.cjs --win nsis --x64 --publish never",
+    "test": "node --test tests/*.test.cjs",
+    "test:electron": "node test-electron.cjs"
+  },
+  "dependencies": {
+    "cors": "2.8.6",
+    "dotenv": "17.3.1",
+    "electron-updater": "6.8.9",
+    "express": "5.2.1",
+    "multer": "2.4.0"
+  },
+  "devDependencies": {
+    "7zip-bin": "5.2.0",
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3"
+  },
+  "overrides": {
+    "@electron/get": {
+      "global-agent": "4.1.3"
+    }
+  },
+  "build": {
+    "appId": "com.ocrnexus.desktop",
+    "productName": "OCR Nexus",
+    "artifactName": "OCR-Nexus-Setup-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "../release"
+    },
+    "files": [
+      "main.cjs",
+      "runtime.cjs",
+      "updates.cjs",
+      "loading.html",
+      "package.json",
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "server.js"
+        ]
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/dist",
+        "to": "frontend"
+      },
+      {
+        "from": "../ocr-service",
+        "to": "ocr-service",
+        "filter": [
+          "main.py",
+          "document_layout.py",
+          "desktop_service.py",
+          "requirements.lock.txt"
+        ]
+      },
+      {
+        "from": "vendor/windows-x64/python",
+        "to": "python"
+      },
+      {
+        "from": "vendor/windows-x64/tesseract",
+        "to": "tesseract"
+      },
+      {
+        "from": "vendor/windows-x64/runtime-manifest.json",
+        "to": "runtime-manifest.json"
+      },
+      {
+        "from": "THIRD-PARTY-NOTICES.txt",
+        "to": "THIRD-PARTY-NOTICES.txt"
+      }
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signExecutable": false,
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "packElevateHelper": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OCR Nexus",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

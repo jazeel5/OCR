@@ -1,0 +1,8 @@
+[
+  {"file":"python-3.14.9-embed-amd64.zip","url":"https://www.python.org/ftp/python/3.14.9/python-3.14.9-embed-amd64.zip","sha256":"3c01d7cfc666f746a6f064f60fb2156ab0ec464d3d738ab796371a46a9bb24a2"},
+  {"file":"tesseract-ocr-w64-setup-5.5.3.20260724.exe","url":"https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe","sha256":"bee9e3434bd94fd65387d9be28cd467a41f61b1275383b55b0f59a1331270ae4"},
+  {"file":"eng.traineddata","url":"https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/4.1.0/eng.traineddata","sha256":"8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba"},
+  {"file":"kan.traineddata","url":"https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/4.1.0/kan.traineddata","sha256":"6f195e0f33f0ec5118c97eff777ed70ac453d67c32bf06a43f79dab875f8ebfe"},
+  {"file":"osd.traineddata","url":"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/osd.traineddata","sha256":"9cf5d576fcc47564f11265841e5ca839001e7e6f38ff7f7aacf46d15a96b00ff"},
+  {"file":"vc_redist.x64.exe","url":"https://download.visualstudio.microsoft.com/download/pr/990c720a-46ce-4dc7-87b9-c2eb615d34b9/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe","sha256":"cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"}
+]

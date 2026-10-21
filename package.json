@@ -1,0 +1,16 @@
+{
+  "name": "ocr-nexus",
+  "version": "2.0.0",
+  "private": true,
+  "description": "PDF and image text extraction with local or Google document OCR",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint",
+    "desktop:dev": "npm run build && npm --prefix desktop start",
+    "desktop:build": "node scripts/build-windows.mjs",
+    "desktop:test": "npm --prefix desktop test",
+    "test": "npm --prefix backend test && ocr-service/venv/bin/python -m pytest -c ocr-service/pytest.ini ocr-service/tests && npm --prefix frontend test"
+  }
+}

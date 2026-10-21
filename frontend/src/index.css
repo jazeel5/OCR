@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@layer base {
+  body { @apply m-0 bg-slate-50 text-slate-900; }
+  button, a, textarea { @apply focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-indigo-600; }
+  button:not(:disabled) { cursor: pointer; }
+}
+
+@layer components {
+  .action-button { @apply inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-50; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

@@ -1,0 +1,17 @@
+**/node_modules/
+**/dist/
+**/venv/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.env
+**/.env.*
+!**/.env.example
+**/uploads/
+**/*credentials*.json
+.DS_Store
+**/test-results/
+**/playwright-report/
+desktop/vendor/
+desktop/.cache/
+release/

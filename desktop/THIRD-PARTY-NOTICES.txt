@@ -1,0 +1,28 @@
+OCR Nexus desktop includes third-party software. Their original license and
+copyright notices remain in the installed application:
+
+Electron / Chromium: LICENSE.electron.txt and LICENSES.chromium.html in the app
+installation directory. https://www.electronjs.org/
+Python: resources/python/LICENSE.txt. https://www.python.org/
+Microsoft Visual C++ runtime: resources/python/MICROSOFT-VC-LICENSE.rtf.
+Python libraries: resources/python/Lib/site-packages/*.dist-info (including
+their LICENSE, licenses, COPYING or NOTICE files). Versions and source wheel
+hashes are recorded in resources/runtime-manifest.json.
+Tesseract: resources/tesseract/doc/LICENSE and AUTHORS.
+https://github.com/tesseract-ocr/tesseract
+Windows Tesseract binaries: UB Mannheim build 5.5.3.20260724.
+https://github.com/UB-Mannheim/tesseract/wiki
+English/Kannada models: tessdata_best 4.1.0 (Apache-2.0).
+https://github.com/tesseract-ocr/tessdata_best/tree/4.1.0
+Orientation model: tessdata_fast 4.1.0 (Apache-2.0).
+https://github.com/tesseract-ocr/tessdata_fast/tree/4.1.0
+
+Tesseract's bundled libraries retain their respective licenses, including
+Leptonica (BSD-2-Clause), GCC runtime libraries (GPL with runtime exception),
+and third-party image/text libraries. Sources for the original Windows build:
+https://github.com/UB-Mannheim/tesseract/tree/v5.5.3.20260724
+https://github.com/msys2/MINGW-packages
+
+JavaScript dependencies and their license files are included in app.asar.
+The installer uses NSIS: https://nsis.sourceforge.io/License
+The build tools (including 7-Zip) are not installed with OCR Nexus.
